@@ -30,6 +30,7 @@ setuptools.setup(
                         'scipy',
                         'matplotlib',
                         'lightgbm'
+                        'thymeboost'
                         ],
     packages=setuptools.find_packages(),
     classifiers=[
