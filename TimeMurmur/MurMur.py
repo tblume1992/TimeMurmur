@@ -13,7 +13,7 @@ sns.set_style('darkgrid')
 
 class Murmur:
     def __init__(self,
-                 floor):
+                 floor=None):
         self.floor = floor
         self.run_dict = None
         self.builder = None
@@ -50,6 +50,7 @@ class Murmur:
             return_proba=False,
             boosting_params=None,
             early_stopping_rounds=10,
+            is_unbalance=True,
             scale_pos_weights=None,
             labels=None,
             ):
@@ -80,6 +81,7 @@ class Murmur:
                                                id_exogenous=id_exogenous,
                                                feature_columns=id_feature_columns)
             if id_feature_columns is not None:
+                id_feature_columns = [i for i in id_feature_columns if i != id_column]
                 process_dataset = process_dataset.drop(id_feature_columns, axis=1)
 
         else:
@@ -101,6 +103,7 @@ class Murmur:
                       return_proba=return_proba,
                       boosting_params=boosting_params,
                       scale_pos_weights=scale_pos_weights,
+                      is_unbalance=is_unbalance,
                       alpha=alpha)
         self.model_obj = model.build_model()
         self.run_dict['global']['model'] = model.boosting_params
@@ -196,19 +199,16 @@ class Murmur:
         if self.floor is not None:
             predicted_df['Predictions'] = predicted_df['Predictions'].clip(lower=self.floor)
         return predicted_df
+
+    def inverse_transform(self, df):
+        scaler = self.run_dict['local'][df['Murmur ID'].iloc[0]]['scaler']
+        df['Predictions'] = scaler.inverse_transform(df['Predictions'].values.reshape(-1,1))
+        return df
     
     def unscale(self, forecast_df):
-        dfs = []
-        for key, value in tqdm(self.run_dict['local'].items()):
-            try:
-                refined_df = forecast_df[forecast_df['Murmur ID'] == int(key)]
-                y = refined_df['Predictions'].values
-                refined_df['Predictions'] = value['scaler'].inverse_transform(y.reshape(-1,1))
-                dfs.append(refined_df)
-            except:
-                pass
-        return pd.concat(dfs)
-    
+        return forecast_df.groupby('Murmur ID').apply(self.inverse_transform)
+
+
     def retrend_fitted(self, fitted):
         trend_ids = self.run_dict['global']['IDs with Trend']
         if trend_ids:

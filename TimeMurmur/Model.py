@@ -18,6 +18,7 @@ class Model:
                  return_proba=False,
                  boosting_params=None,
                  scale_pos_weights=None,
+                 is_unbalance=True,
                  alpha=None):
         self.objective = objective
         self.return_proba = return_proba
@@ -35,7 +36,8 @@ class Model:
                                     'num_leaves': num_leaves,
                                     'num_iterations': num_iterations,
                                     'alpha': alpha,
-                                    'scale_pos_weights': scale_pos_weights
+                                    'scale_pos_weights': scale_pos_weights,
+                                    'is_unbalance': is_unbalance
                                 }
         else:
             self.boosted_params = boosting_params

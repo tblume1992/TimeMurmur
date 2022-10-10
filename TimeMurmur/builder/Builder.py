@@ -84,7 +84,7 @@ class Builder:
     
     def create_murmur_id(self, dataset):
         try:
-            dataset[self.id_column].astype(int)
+            dataset[self.id_column] = dataset[self.id_column].astype(int)
             dataset['Murmur ID'] = dataset[self.id_column]
             self.run_dict['global']['ID Mapping'] = dataset[[self.id_column, 'Murmur ID']].drop_duplicates()
         except:
@@ -285,10 +285,10 @@ class Builder:
             pred_X = pred_X.merge(self.run_dict['global']['id_axis'],
                                     on='Murmur ID',
                                     how='left')
-        if time_exogenous is not None:
-            pred_X = pred_X.merge(time_exogenous, 
-                                  on=self.date_column,
-                                  how='left')
+        # if time_exogenous is not None:
+        #     pred_X = pred_X.merge(time_exogenous, 
+        #                           on=self.date_column,
+        #                           how='left')
         if panel_exogenous is not None:
             pred_X = pred_X.merge(panel_exogenous,
                                     on=merge_on,
