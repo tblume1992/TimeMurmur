@@ -12,14 +12,14 @@ import numpy as np
 class Optimize:
     def __init__(self,
                  y,
-                 seance_class,
+                 murmur_class,
                  test_set,
                  seasonal_period=0,
                  n_folds=3,
                  test_size=None,
                  ):
         self.y = y
-        self.seance_class = seance_class
+        self.murmur_class = murmur_class
         self.test_set = test_set
         self.seasonal_period = seasonal_period
         self.n_folds = n_folds
@@ -78,7 +78,7 @@ class Optimize:
             # 'colsample_bytree': float(params['colsample_bytree']),
         }
         # print(params)
-        clf = self.seance_class(**params)
+        clf = self.murmur_class(**params)
         # score = cross_val_score(clf, self.y, self.y, scoring=mean_squared_error, cv=TimeSeriesSplit(self.n_folds)).mean()
         score = self.scorer(clf, self.y, mean_squared_error, self.test_set)
         # print(f"MSE {score} params {params}")

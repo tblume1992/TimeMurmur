@@ -13,7 +13,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="TimeMurmur",
-    version="0.0.3",
+    version="0.0.4",
     author="Tyler Blume",
     # url="https://github.com/tblume1992/ThymeBoost",
     long_description=long_description,
@@ -30,7 +30,8 @@ setuptools.setup(
                         'scipy',
                         'matplotlib',
                         'lightgbm',
-                        'thymeboost'
+                        'thymeboost',
+                        'shap'
                         ],
     packages=setuptools.find_packages(),
     classifiers=[

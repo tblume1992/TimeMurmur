@@ -5,6 +5,8 @@ import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
+import shap
+from TimeMurmur.Optimizer import Optimize
 from TimeMurmur.builder.Builder import Builder
 from TimeMurmur.Model import Model
 from TimeMurmur.utils.utility_functions import infer_freq
@@ -53,6 +55,7 @@ class Murmur:
             is_unbalance=True,
             scale_pos_weights=None,
             labels=None,
+            floor_bind=False
             ):
         self.scale = scale
         self.id_column = id_column
@@ -234,7 +237,22 @@ class Murmur:
                 retrended_pred = y + np.reshape(linear_trend, (-1,))
                 predicted.loc[predicted['Murmur ID'] == int(ts_id),'Predictions'] = retrended_pred
         return predicted
-    
+
+    def Explain(self):
+        explainer = shap.TreeExplainer(self.model_obj)
+        shap_values = explainer.shap_values(self.train_X)
+        return explainer, shap_values
+
+    def Optimize(cls, y, seasonality, n_folds, test_size=None):
+        optimizer = Optimize(y, Murmur, seasonality, n_folds, test_size)
+        optimized = optimizer.fit()
+        optimized['ar'] = list(range(1, int(optimized['ar']) + 1))
+        optimized['n_estimators'] = int(optimized['n_estimators'])
+        optimized['num_leaves'] = int(optimized['num_leaves'])
+        optimized['n_basis'] = int(optimized['n_basis'])
+        optimized['fourier_order'] = int(optimized['fourier_order'])
+        return optimized
+
     def plot(self,
              fitted,
              ts_id=None,

@@ -19,3 +19,6 @@ def handle_future_index(dates, freq, forecast_horizon):
                                  periods=forecast_horizon + 1,
                                  freq=freq)[1:]
     return future_index
+
+def get_data():
+    return pd.read_csv(r'TimeMurmur/utils/murmur_example.csv')

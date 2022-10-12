@@ -15,7 +15,7 @@ class PanelAxis:
                  seasonal_period):
         self.run_dict = run_dict
         self.seasonal_period = seasonal_period
-        if not isinstance(n_basis, list):
+        if not isinstance(n_basis, list) and n_basis is not None:
             n_basis = [n_basis]
         self.n_basis = n_basis
         self.decay = decay
