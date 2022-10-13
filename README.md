@@ -1,4 +1,5 @@
 # TimeMurmur
+Requires the forecast period is the same for all time series.
 ## Quickstart
 ```
 pip install TimeMurmur
