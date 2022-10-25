@@ -2,7 +2,8 @@
 import pandas as pd
 import numpy as np
 from scipy import stats
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import (StandardScaler, MinMaxScaler, RobustScaler,
+                                   PowerTransformer, MaxAbsScaler, QuantileTransformer)
 
 
 class PreProcess:
@@ -13,7 +14,9 @@ class PreProcess:
                  test_size,
                  linear_trend,
                  seasonal_period,
-                 run_dict):
+                 run_dict,
+                 scale_type,
+                 linear_test_window):
         self.target_column = target_column
         self.scale = scale
         self.difference = difference
@@ -21,9 +24,27 @@ class PreProcess:
         self.seasonal_period = seasonal_period
         self.run_dict = run_dict
         self.linear_trend = linear_trend
+        self.scale_type = scale_type
+        self.linear_test_window = linear_test_window
         
     def scale_input(self, y, ts_id):
-        scaler = StandardScaler()
+        if self.scale_type == 'standard':
+            scaler = StandardScaler()
+        elif self.scale_type == 'minmax':
+            scaler = MinMaxScaler()
+        elif self.scale_type == 'maxabs':
+            scaler = MaxAbsScaler()
+        elif self.scale_type == 'robust':
+            scaler = RobustScaler()
+        elif self.scale_type == 'quantile':
+            scaler = QuantileTransformer()
+        elif self.scale_type == 'boxcox':
+            scaler = PowerTransformer(method='box-cox')
+        #unstable
+        # elif self.scale_type == 'power':
+        #     scaler = PowerTransformer()
+        else:
+            raise ValueError(f'{self.scale_type} not recognized! Options are: standard or minmax')
         scaler.fit(np.asarray(y).reshape(-1, 1))
         self.run_dict['local'][ts_id]['scaler'] = scaler
         scaled_y = y.values.copy()
@@ -56,7 +77,10 @@ class PreProcess:
         else:
             required_len = 6
         if self.linear_trend and len(y) > required_len:
-            n_bins = (1 + len(y)**(1/3) * 2)
+            if self.linear_test_window is not None:
+                n_bins = self.linear_test_window
+            else:
+                n_bins = (1 + len(y)**(1/3) * 2)
             splitted_array = np.array_split(y.reshape(-1,), int(n_bins))
             mean_splits = np.array([np.mean(i) for i in splitted_array])
             asc_array = np.sort(mean_splits)

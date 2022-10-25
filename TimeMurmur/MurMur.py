@@ -9,17 +9,18 @@ import shap
 from TimeMurmur.Optimizer import Optimize
 from TimeMurmur.builder.Builder import Builder
 from TimeMurmur.Model import Model
-from TimeMurmur.utils.utility_functions import infer_freq
+from TimeMurmur.utils.utility_functions import infer_freq, smape, mape, mase, mse
 sns.set_style('darkgrid')
 
 
 class Murmur:
     def __init__(self,
-                 floor=None):
+                 floor=None,
+                 scale_type='standard'):
         self.floor = floor
         self.run_dict = None
         self.builder = None
-    
+
     def fit(self,
             df,
             target_column,
@@ -36,6 +37,7 @@ class Murmur:
             categorical_columns=None,
             decay=.99,
             ar=None,
+            ma=None,
             fourier_order=10,
             seasonal_weights=None,
             weighted=True,
@@ -55,7 +57,10 @@ class Murmur:
             is_unbalance=True,
             scale_pos_weights=None,
             labels=None,
-            floor_bind=False
+            floor_bind=False,
+            scale_type='standard',
+            basis_difference=False,
+            linear_test_window=None
             ):
         self.scale = scale
         self.id_column = id_column
@@ -70,6 +75,7 @@ class Murmur:
                           categorical_columns=categorical_columns,
                           decay=decay,
                           ar=ar,
+                          ma=ma,
                           fourier_order=fourier_order,
                           freq=freq,
                           seasonal_weights=seasonal_weights,
@@ -77,7 +83,10 @@ class Murmur:
                           n_basis=n_basis,
                           seasonal_period=seasonal_period,
                           test_size=test_size,
-                          linear_trend=linear_trend)
+                          linear_trend=linear_trend,
+                          scale_type=scale_type,
+                          basis_difference=basis_difference,
+                          linear_test_window=linear_test_window)
         process_dataset = self.builder.preprocess(df)
         if id_feature_columns is not None or id_exogenous is not None:
             id_dataset = self.builder.build_id_axis(process_dataset,
@@ -134,9 +143,9 @@ class Murmur:
         fitted = self.model_obj.predict(train_X)
         fitted_df = dataset[['Murmur ID', id_column, date_column, target_column]]
         fitted_df['Predictions'] = fitted
+        fitted_df = self.retrend_fitted(fitted_df)
         if self.scale:
             fitted_df = self.unscale(fitted_df)
-        fitted_df = self.retrend_fitted(fitted_df)
         if self.floor is not None:
             fitted_df['Predictions'] = fitted_df['Predictions'].clip(lower=self.floor)
         return fitted_df
@@ -195,10 +204,9 @@ class Murmur:
                                               on='Murmur ID',
                                               how='left')
             predicted_df['Predictions'] = predicted
-
+        predicted_df = self.retrend_predicted(predicted_df)
         if self.scale:
             predicted_df = self.unscale(predicted_df)
-        predicted_df = self.retrend_predicted(predicted_df)
         if self.floor is not None:
             predicted_df['Predictions'] = predicted_df['Predictions'].clip(lower=self.floor)
         return predicted_df
@@ -252,6 +260,24 @@ class Murmur:
         optimized['n_basis'] = int(optimized['n_basis'])
         optimized['fourier_order'] = int(optimized['fourier_order'])
         return optimized
+
+    def Evaluate(self, fitted, predicted, test_df):
+        id_column = self.run_dict['global']['ID Column']
+        date_column = self.run_dict['global']['Date Column']
+        target_column = self.run_dict['global']['Target Column']
+        merge_on = [id_column, date_column]
+        predicted = predicted.merge(test_df[merge_on + [target_column]],
+                                    on=merge_on)
+        grouped_df = predicted.groupby(id_column)
+        def grouped_smape(df):
+            return smape(df[target_column], df['Predictions'])
+        def grouped_mse(df):
+            return mse(df[target_column], df['Predictions'])
+        def grouped_mape(df):
+            return mape(df[target_column], df['Predictions'])
+        print(np.mean(grouped_df.apply(grouped_smape)))
+        print(100*np.mean(grouped_df.apply(grouped_mape)))
+        print(np.mean(grouped_df.apply(grouped_mse)))
 
     def plot(self,
              fitted,
@@ -318,5 +344,12 @@ class Murmur:
                              alpha=.25)
 
         plt.show()
+
+    def feature_importance(self, **kwargs):
+        import lightgbm as gbm
+        gbm.plot_importance(self.model_obj, **kwargs)
+
+
+
 
 

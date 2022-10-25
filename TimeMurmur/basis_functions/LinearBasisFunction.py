@@ -5,10 +5,15 @@ import numpy as np
 
 class LinearBasisFunction:
 
-    def __init__(self, n_changepoints, decay=None, weighted=True):
+    def __init__(self,
+                 n_changepoints,
+                 decay=None,
+                 weighted=True,
+                 basis_difference=False):
         self.n_changepoints = n_changepoints
         self.decay = decay
         self.weighted = weighted
+        self.basis_difference = basis_difference
 
     def get_basis(self, y):
         y = y.copy()
@@ -40,6 +45,9 @@ class LinearBasisFunction:
                                       len(y) - len_splits + 1)
             changepoints[:, i] = np.append(left_basis, right_basis[1:])
         changepoints[:, i+1] = np.arange(0, len(y))
+        if self.basis_difference:
+            r,c = np.triu_indices(changepoints.shape[1],1)
+            changepoints = changepoints[:,r] - changepoints[:,c]
         return changepoints
 
     def add_decay(self, moving_point, final_point, mean_point):

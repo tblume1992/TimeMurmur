@@ -12,13 +12,15 @@ class PanelAxis:
                  n_basis,
                  decay,
                  weighted,
-                 seasonal_period):
+                 seasonal_period,
+                 basis_difference):
         self.run_dict = run_dict
         self.seasonal_period = seasonal_period
         if not isinstance(n_basis, list) and n_basis is not None:
             n_basis = [n_basis]
         self.n_basis = n_basis
         self.decay = decay
+        self.basis_difference = basis_difference
         self.weighted = weighted
     
     def get_piecewise(self, y, n_basis, ts_id):
@@ -26,7 +28,8 @@ class PanelAxis:
             n_basis = len(y) - 1
         lbf = LinearBasisFunction(n_changepoints=n_basis,
                                   decay=self.decay,
-                                  weighted=self.weighted)
+                                  weighted=self.weighted,
+                                  basis_difference=self.basis_difference)
         basis = lbf.get_basis(y)
         self.run_dict['local'][ts_id][f'{n_basis}_function'] = lbf
         self.run_dict['local'][ts_id][f'{n_basis}_basis'] = basis

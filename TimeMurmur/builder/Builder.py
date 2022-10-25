@@ -19,6 +19,7 @@ class Builder:
                  date_column,
                  scale,
                  ar,
+                 ma,
                  decay,
                  n_basis,
                  seasonal_period,
@@ -29,8 +30,16 @@ class Builder:
                  linear_trend,
                  fourier_order,
                  seasonal_weights,
-                 test_size):
+                 test_size,
+                 scale_type,
+                 basis_difference,
+                 linear_test_window):
+        if isinstance(ar, int):
+            raise ValueError('AR Lag must be passed as a list!')
+        if isinstance(ma, int):
+            raise ValueError('MA Lag must be passed as a list!')
         self.ar = ar
+        self.ma = ma
         self.target_column = target_column
         self.id_column = id_column 
         self.date_column = date_column
@@ -38,10 +47,13 @@ class Builder:
         self.scale = scale 
         self.fourier_order = fourier_order
         self.weighted = weighted
+        self.linear_test_window = linear_test_window
         self.seasonal_weights = seasonal_weights
         self.difference = difference 
         self.n_basis = n_basis
         self.decay = decay
+        self.basis_difference = basis_difference
+        self.scale_type = scale_type
         if isinstance(seasonal_period, int) or isinstance(seasonal_period, float):
             seasonal_period = [seasonal_period]
         self.seasonal_period = seasonal_period
@@ -61,7 +73,13 @@ class Builder:
             self.run_dict['global']['AR Datasets'] = None
         else:
             self.run_dict['global']['AR Datasets'] = {}
-        
+        if ma is None:
+            self.run_dict['global']['MA Datasets'] = None
+            self.run_dict['global']['Future MA Datasets'] = None
+        else:
+            self.run_dict['global']['MA Datasets'] = {}
+            self.run_dict['global']['Future MA Datasets'] = {}
+
     def build_single(self, single_dataset):
         ts_id = single_dataset['Murmur ID'].iloc[0]
         self.run_dict['local'][ts_id] = {}
@@ -71,7 +89,9 @@ class Builder:
                                     test_size=self.test_size,
                                     run_dict=self.run_dict,
                                     seasonal_period=self.seasonal_period,
-                                    linear_trend=self.linear_trend).process(single_dataset)
+                                    linear_trend=self.linear_trend,
+                                    scale_type=self.scale_type,
+                                    linear_test_window=self.linear_test_window).process(single_dataset)
         self.single = single_dataset
         single_dataset = self.build_panel_axis(single_dataset)
         return single_dataset
@@ -177,7 +197,7 @@ class Builder:
         ar_dataset = dataset[['Murmur ID', self.date_column, 'Murmur Target']]
         ar_builder = ArAxis(self.run_dict,
                             self.freq)
-        ar_builder.build_axis(ar_dataset, self.ar)
+        ar_builder.build_axis(ar_dataset, self.ar, self.ma)
         return
     
     def build_future_ar_axis(self, predicted_dataset):
@@ -191,7 +211,8 @@ class Builder:
                                   n_basis=self.n_basis,
                                   decay=self.decay,
                                   weighted=self.weighted,
-                                  seasonal_period=self.seasonal_period)
+                                  seasonal_period=self.seasonal_period,
+                                  basis_difference=self.basis_difference)
         panel_axis = panel_builder.build_axis(dataset)
         return panel_axis
 
@@ -201,7 +222,8 @@ class Builder:
                                   n_basis=self.n_basis,
                                   decay=self.decay,
                                   weighted=self.weighted,
-                                  seasonal_period=self.seasonal_period)
+                                  seasonal_period=self.seasonal_period,
+                                  basis_difference=self.basis_difference)
         panel_axis = panel_builder.build_future_axis(dataset, 
                                                      self.forecast_horizon,
                                                      ts_id)
@@ -251,6 +273,13 @@ class Builder:
                 processed_dataset = processed_dataset.merge(ar_dataset,
                                                             on=['Murmur ID', self.date_column],
                                                             how='left')
+        if self.ma is not None:
+            print('building MA Lags')
+            self.build_ar_axis(processed_dataset)
+            for _, ma_dataset in tqdm(self.run_dict['global']['MA Datasets'].items()):
+                processed_dataset = processed_dataset.merge(ma_dataset,
+                                                            on=['Murmur ID', self.date_column],
+                                                            how='left')
         return processed_dataset
     
     def build_future_dataset(self, 
@@ -285,6 +314,12 @@ class Builder:
             pred_X = pred_X.merge(self.run_dict['global']['id_axis'],
                                     on='Murmur ID',
                                     how='left')
+        if self.run_dict['global']['Future MA Datasets'] is not None:
+            for ma in self.ma:
+                ma_df = self.run_dict['global']['Future MA Datasets'][f'ma_{ma}']
+                pred_X = pred_X.merge(ma_df,
+                                      on='Murmur ID',
+                                      how='left')
         # if time_exogenous is not None:
         #     pred_X = pred_X.merge(time_exogenous, 
         #                           on=self.date_column,
