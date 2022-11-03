@@ -3,21 +3,23 @@ import pandas as pd
 import statsmodels.api as sm
 import inspect
 import itertools
-from scipy.stats import entropy
+from tqdm import tqdm
+from scipy.stats import entropy, variation
 from ThymeBoost import ThymeBoost as tb
 
 
 class FeatureExtraction:
-    def __init__(self, series, period):
+    def __init__(self, series, period, scale_data=False):
         self.series = pd.Series(np.reshape(series, (-1, ))).reset_index(drop = True)
         if len(self.series) < 12:
             self.period = 0
         else:
             self.period = period
+        self.scale_data=scale_data
         # self.extract()
         return
     
-    def scale_data(self):
+    def scale(self):
         series_min = np.min(self.series)
         series_max = np.max(self.series)
         series_mean = np.mean(self.series)
@@ -137,15 +139,18 @@ class FeatureExtraction:
     def calc_n_zeros(self):
         return self.zero_count
 
-    def calc_seasonal_period(self):
-        return self.period
+    def calc_cov(self):
+        return variation(self.series)
+
+    # def calc_seasonal_period(self):
+    #     return self.period
     
     # def calc_lp_curvature(self):
     #     return self.lp_coefs[1]
     
     # def calc_lp_linearity(self):
     #     return self.lp_coefs[0]
-    
+
     def calc_std(self):
         return np.std(self.series)
     
@@ -173,7 +178,7 @@ class FeatureExtraction:
         return sm.tsa.stattools.adfuller(self.series, maxlag = 1)[0]
 
     def calc_kpss(self):
-        return sm.tsa.stattools.kpss(self.series, lags = 1)[0]
+        return sm.tsa.stattools.kpss(self.series)[0]
     
     def calc_mean_abs_change(self):
         return np.mean(np.abs(np.diff(self.series)))
@@ -229,9 +234,10 @@ class FeatureExtraction:
 # =============================================================================
     
     def extract(self):
-        self.features = {}
+        self.features = pd.DataFrame(index=[0])
         self.count_zeros()
-        self.scale_data()
+        if self.scale_data:
+            self.scale()
         # self.get_differenced_series()
         if self.period:
             self.n_season = int(len(self.series)/self.period)
@@ -250,6 +256,24 @@ class FeatureExtraction:
             if 'calc' in method[0]:
                 try:
                     self.features[method[0]] = method[1](self)
-                except:
-                    self.features[method[0]] = 0
+                except Exception:
+                    self.features[method[0]] = np.nan
         return self.features
+
+def grouped_features(df, target_column, period, scale_data):
+    y = df[target_column]
+    extractor = FeatureExtraction(y, period, scale_data)
+    return extractor.extract()
+
+def get_features(dataset, id_column, target_column, seasonal_period, scale_data=False):
+    features = dataset.groupby(id_column).progress_apply(grouped_features,
+                                                         target_column=target_column,
+                                                         period=seasonal_period,
+                                                         scale_data=scale_data)
+    features = features.reset_index()
+    features = features.drop('level_1', axis=1)
+    return features
+
+#%%
+if __name__ == '__main__':
+    test = get_features(train_df, 'ID', 'V', 52)

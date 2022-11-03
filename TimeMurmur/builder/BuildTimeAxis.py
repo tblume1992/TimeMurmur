@@ -13,7 +13,8 @@ class TimeAxis:
                  fourier_order, 
                  freq,
                  date_column,
-                 seasonal_weights
+                 seasonal_weights,
+                 seasonal_dummy
                  ):
         self.dates = dates.drop_duplicates().sort_values().reset_index(drop=True)
         if seasonal_period is not None:
@@ -24,6 +25,7 @@ class TimeAxis:
         self.run_dict = run_dict
         self.freq = freq
         self.date_column = date_column
+        self.seasonal_dummy = seasonal_dummy
         self.seasonal_weights = seasonal_weights
     
     def get_fourier(self, length, fourier_order, seasonal_period):
@@ -74,12 +76,27 @@ class TimeAxis:
             return time_exogenous
         axis = None
         for seas in self.seasonal_period:
-            seas_axis = self.get_fourier(len(self.run_dict['global']['Dataset Dates']), 
-                                    self.fourier_order,
-                                    seas)
-            seas_axis = pd.DataFrame(seas_axis,
-                                columns=[f'{seas}_fourier_{i+1}' for i in range(2 * self.fourier_order)],
-                                )
+            if self.fourier_order is not None:
+                date_len = len(self.run_dict['global']['Dataset Dates'])
+                seas_axis = self.get_fourier(date_len,
+                                             self.fourier_order,
+                                             seas)
+                column_names = [f'{seas}_fourier_{i+1}' for i in range(2 * self.fourier_order)]
+                seas_axis = pd.DataFrame(seas_axis,
+                                         columns=column_names,
+                                         )
+                if self.seasonal_dummy:
+                    date_length = len(self.dates)
+                    repeats = int(1+(date_length)/(seas))
+                    dummy = list(np.arange(1, seas + 1)) * repeats
+                    seas_axis['murmur_seasonal_dummy'] = dummy[:date_length]
+            elif self.seasonal_dummy:
+                date_length = len(self.dates)
+                repeats = int(1+(date_length)/(seas))
+                seas_axis = list(np.arange(1, seas + 1)) * repeats
+                seas_axis = pd.DataFrame(seas_axis[:date_length],
+                                         columns=['murmur_seasonal_dummy'],
+                                         )
             if axis is None:
                 axis = seas_axis
             else:
@@ -105,13 +122,27 @@ class TimeAxis:
             return future_exogenous
         future_axis = None
         for seas in self.seasonal_period:
-            self.fbf = self.run_dict['global'][f'{seas}_basis_function']
-            future_seas = self.get_future_fourier(forecast_horizon,
-                                                  seas,
-                                                  self.fourier_order)
-            future_seas = pd.DataFrame(future_seas,
-                                columns=[f'{seas}_fourier_{i+1}' for i in range(2 * self.fourier_order)],
-                                index=future_dates)
+            if self.fourier_order is not None:
+                self.fbf = self.run_dict['global'][f'{seas}_basis_function']
+                future_seas = self.get_future_fourier(forecast_horizon,
+                                                      seas,
+                                                      self.fourier_order)
+                future_seas = pd.DataFrame(future_seas,
+                                    columns=[f'{seas}_fourier_{i+1}' for i in range(2 * self.fourier_order)],
+                                    index=future_dates)
+                if self.seasonal_dummy:
+                    date_length = len(self.dates) + forecast_horizon
+                    repeats = int(1+(date_length)/(seas))
+                    dummy = list(np.arange(1, seas + 1)) * repeats
+                    future_seas['murmur_seasonal_dummy'] = dummy[-forecast_horizon:]
+            elif self.seasonal_dummy:
+                date_length = len(self.dates) + forecast_horizon
+                repeats = int(1+(date_length)/(seas))
+                future_seas = list(np.arange(1, seas + 1)) * repeats
+                future_seas = pd.DataFrame(future_seas[-forecast_horizon:],
+                                         columns=['murmur_seasonal_dummy'],
+                                         index=future_dates
+                                         )
             if future_axis is None:
                 future_axis = future_seas
             else:

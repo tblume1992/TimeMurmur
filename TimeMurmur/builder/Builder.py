@@ -9,6 +9,7 @@ from TimeMurmur.builder.BuildTimeAxis import TimeAxis
 from TimeMurmur.builder.BuildPanelAxis import PanelAxis
 from TimeMurmur.builder.BuildArAxis import ArAxis
 from TimeMurmur.builder.BuildIdAxis import IdAxis
+from TimeMurmur.builder.ExtractFeatures import ExtractFeatures
 tqdm.pandas()
 
 
@@ -33,7 +34,12 @@ class Builder:
                  test_size,
                  scale_type,
                  basis_difference,
-                 linear_test_window):
+                 linear_test_window,
+                 seasonal_dummy,
+                 floor_bind,
+                 floor,
+                 outlier_cap,
+                 ts_features):
         if isinstance(ar, int):
             raise ValueError('AR Lag must be passed as a list!')
         if isinstance(ma, int):
@@ -51,6 +57,7 @@ class Builder:
         self.seasonal_weights = seasonal_weights
         self.difference = difference 
         self.n_basis = n_basis
+        self.seasonal_dummy = seasonal_dummy
         self.decay = decay
         self.basis_difference = basis_difference
         self.scale_type = scale_type
@@ -60,15 +67,21 @@ class Builder:
         self.categorical_columns = categorical_columns 
         self.test_size = test_size
         self.linear_trend = linear_trend
+        self.floor_bind = floor_bind
+        self.floor = floor
+        self.outlier_cap = outlier_cap
+        self.ts_features = ts_features
         self.run_dict = {}
         self.run_dict['local'] = {}
         self.run_dict['global'] = {}
         self.run_dict['global']['categorical_encoder'] = {}
         self.run_dict['global']['IDs with Trend'] = []
+        self.run_dict['global']['main_seasonal_period'] = self.seasonal_period[0]
         self.run_dict['global']['id_axis'] = None
         self.run_dict['global']['Date Column'] = date_column
         self.run_dict['global']['ID Column'] = id_column
         self.run_dict['global']['Target Column'] = target_column
+        self.run_dict['global']['ts_features'] = None
         if ar is None:
             self.run_dict['global']['AR Datasets'] = None
         else:
@@ -91,7 +104,10 @@ class Builder:
                                     seasonal_period=self.seasonal_period,
                                     linear_trend=self.linear_trend,
                                     scale_type=self.scale_type,
-                                    linear_test_window=self.linear_test_window).process(single_dataset)
+                                    linear_test_window=self.linear_test_window,
+                                    floor_bind=self.floor_bind,
+                                    floor=self.floor,
+                                    outlier_cap=self.outlier_cap).process(single_dataset)
         self.single = single_dataset
         single_dataset = self.build_panel_axis(single_dataset)
         return single_dataset
@@ -157,7 +173,8 @@ class Builder:
                                 fourier_order=self.fourier_order,
                                 date_column=self.date_column,
                                 seasonal_weights=self.seasonal_weights,
-                                freq=self.freq
+                                freq=self.freq,
+                                seasonal_dummy=self.seasonal_dummy
                                 )
         self.run_dict['global']['Dates'] = dates
         time_axis = time_builder.build_axis(time_exogenous=time_exogenous)
@@ -171,7 +188,8 @@ class Builder:
                                 fourier_order=self.fourier_order,
                                 date_column=self.date_column,
                                 seasonal_weights=self.seasonal_weights,
-                                freq=self.freq
+                                freq=self.freq,
+                                seasonal_dummy=self.seasonal_dummy
                                 )
         self.run_dict['global']['Dates'] = dates
         time_axis = time_builder.build_future_axis(dates,
@@ -247,9 +265,10 @@ class Builder:
         if 'Murmur ID' in dataset.columns:
             processed_dataset = dataset
         else:
+            print('Preprocessing Data: Scaling, building basis functions, capping outliers etc.')
             processed_dataset = self.preprocess(dataset)
-        print('building ID')
         if id_axis is not None:
+            print('Building ID Features')
             try:
                 drop_columns = [i for i in list(id_axis.columns) if i not in ['Murmur ID',
                                                                               self.id_column]]
@@ -261,20 +280,26 @@ class Builder:
                                                         on=[self.id_column,
                                                             'Murmur ID'],
                                                         how='left')
-        print('building Time')
+        if self.ts_features:
+            print('Building Time Series Features')
+            ExtractFeatures(self.run_dict).build_axis(processed_dataset)
+            processed_dataset = processed_dataset.merge(self.run_dict['global']['ts_features'],
+                                    on='Murmur ID',
+                                    how='left')
         if time_axis is not None:
+            print('Building Time Features')
             processed_dataset = processed_dataset.merge(time_axis,
                                                         on=self.date_column,
                                                         how='left')
         if self.ar is not None:
-            print('building AR Lags')
+            print('Building AR Lags')
             self.build_ar_axis(processed_dataset)
             for _, ar_dataset in tqdm(self.run_dict['global']['AR Datasets'].items()):
                 processed_dataset = processed_dataset.merge(ar_dataset,
                                                             on=['Murmur ID', self.date_column],
                                                             how='left')
         if self.ma is not None:
-            print('building MA Lags')
+            print('Building MA Lags')
             self.build_ar_axis(processed_dataset)
             for _, ma_dataset in tqdm(self.run_dict['global']['MA Datasets'].items()):
                 processed_dataset = processed_dataset.merge(ma_dataset,
@@ -305,6 +330,11 @@ class Builder:
         if self.n_basis and self.n_basis is not None:
             pred_X = pred_X.groupby('Murmur ID').apply(self.build_single_prediction)
             pred_X = pred_X.reset_index(drop=True)
+        if self.run_dict['global']['ts_features'] is not None:
+            print('Building Time Series Features')
+            pred_X = pred_X.merge(self.run_dict['global']['ts_features'],
+                                  on='Murmur ID',
+                                  how='left')
         if time_axis is not None:
             pred_X = pred_X.merge(time_axis, 
                                   left_on=self.date_column,
@@ -314,6 +344,10 @@ class Builder:
             pred_X = pred_X.merge(self.run_dict['global']['id_axis'],
                                     on='Murmur ID',
                                     how='left')
+        # if self.run_dict['global']['ts_features'] is not None:
+        #     pred_X = pred_X.merge(self.run_dict['global']['ts_features'],
+        #                             on='Murmur ID',
+        #                             how='left')
         if self.run_dict['global']['Future MA Datasets'] is not None:
             for ma in self.ma:
                 ma_df = self.run_dict['global']['Future MA Datasets'][f'ma_{ma}']

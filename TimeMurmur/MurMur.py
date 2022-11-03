@@ -6,9 +6,10 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
 import shap
-from TimeMurmur.Optimizer import Optimize
+# from TimeMurmur.Optimizer import Optimize
 from TimeMurmur.builder.Builder import Builder
 from TimeMurmur.Model import Model
+from TimeMurmur.utils.FeatureExtraction import get_features
 from TimeMurmur.utils.utility_functions import infer_freq, smape, mape, mase, mse
 sns.set_style('darkgrid')
 
@@ -60,7 +61,10 @@ class Murmur:
             floor_bind=False,
             scale_type='standard',
             basis_difference=False,
-            linear_test_window=None
+            linear_test_window=None,
+            seasonal_dummy=False,
+            outlier_cap=None,
+            ts_features=False
             ):
         self.scale = scale
         self.id_column = id_column
@@ -86,7 +90,12 @@ class Murmur:
                           linear_trend=linear_trend,
                           scale_type=scale_type,
                           basis_difference=basis_difference,
-                          linear_test_window=linear_test_window)
+                          linear_test_window=linear_test_window,
+                          seasonal_dummy=seasonal_dummy,
+                          floor_bind=floor_bind,
+                          floor=self.floor,
+                          outlier_cap=outlier_cap,
+                          ts_features=ts_features)
         process_dataset = self.builder.preprocess(df)
         if id_feature_columns is not None or id_exogenous is not None:
             id_dataset = self.builder.build_id_axis(process_dataset,
@@ -123,24 +132,26 @@ class Murmur:
             cat_features = ['Murmur ID']
         else:
             cat_features = list(set(categorical_columns + ['Murmur ID']))
+        if 'murmur_seasonal_dummy' in dataset.columns:
+            cat_features += ['murmur_seasonal_dummy']
+        self.run_dict['global']['cat_features'] = cat_features
         dataset = dataset.sort_values(by=['Murmur ID', date_column])
-        train_X = dataset.drop(drop_columns+['Murmur Target', 'Murmur Data Split'], axis=1)
+        self.train_X = dataset.drop(drop_columns+['Murmur Target', 'Murmur Data Split'], axis=1)
         eval_set = []
         train_y = dataset['Murmur Target']
         if labels is not None:
             train_y = labels
         if not eval_set:
             early_stopping_rounds = None
-        self.columns = train_X.columns
-        self.train_X = dataset
+        self.columns = self.train_X.columns
+        # self.train_X = dataset
         self.train_y = train_y
-        self.dataset = dataset
-        self.model_obj.fit(train_X,
+        self.model_obj.fit(self.train_X,
                            train_y, 
                             eval_set=eval_set,
                             early_stopping_rounds=early_stopping_rounds, 
                            categorical_feature=cat_features)
-        fitted = self.model_obj.predict(train_X)
+        fitted = self.model_obj.predict(self.train_X)
         fitted_df = dataset[['Murmur ID', id_column, date_column, target_column]]
         fitted_df['Predictions'] = fitted
         fitted_df = self.retrend_fitted(fitted_df)
@@ -251,20 +262,21 @@ class Murmur:
         shap_values = explainer.shap_values(self.train_X)
         return explainer, shap_values
 
-    def Optimize(cls, y, seasonality, n_folds, test_size=None):
-        optimizer = Optimize(y, Murmur, seasonality, n_folds, test_size)
-        optimized = optimizer.fit()
-        optimized['ar'] = list(range(1, int(optimized['ar']) + 1))
-        optimized['n_estimators'] = int(optimized['n_estimators'])
-        optimized['num_leaves'] = int(optimized['num_leaves'])
-        optimized['n_basis'] = int(optimized['n_basis'])
-        optimized['fourier_order'] = int(optimized['fourier_order'])
-        return optimized
+    # def Optimize(cls, y, seasonality, n_folds, test_size=None):
+    #     optimizer = Optimize(y, Murmur, seasonality, n_folds, test_size)
+    #     optimized = optimizer.fit()
+    #     optimized['ar'] = list(range(1, int(optimized['ar']) + 1))
+    #     optimized['n_estimators'] = int(optimized['n_estimators'])
+    #     optimized['num_leaves'] = int(optimized['num_leaves'])
+    #     optimized['n_basis'] = int(optimized['n_basis'])
+    #     optimized['fourier_order'] = int(optimized['fourier_order'])
+    #     return optimized
 
     def Evaluate(self, fitted, predicted, test_df):
         id_column = self.run_dict['global']['ID Column']
         date_column = self.run_dict['global']['Date Column']
         target_column = self.run_dict['global']['Target Column']
+        seasonal_period = self.run_dict['global']['main_seasonal_period']
         merge_on = [id_column, date_column]
         predicted = predicted.merge(test_df[merge_on + [target_column]],
                                     on=merge_on)
@@ -275,9 +287,24 @@ class Murmur:
             return mse(df[target_column], df['Predictions'])
         def grouped_mape(df):
             return mape(df[target_column], df['Predictions'])
-        print(np.mean(grouped_df.apply(grouped_smape)))
-        print(100*np.mean(grouped_df.apply(grouped_mape)))
-        print(np.mean(grouped_df.apply(grouped_mse)))
+        mape_df = grouped_df.apply(grouped_mape)
+        feature_df = get_features(fitted,
+                                  id_column,
+                                  target_column,
+                                  seasonal_period,
+                                  scale_data=False)
+        print(f'Mean SMAPE: {np.mean(grouped_df.apply(grouped_smape))}')
+        print(f'Mean MAPE: {100*np.mean(mape_df)}')
+        print(f'Mean MSE: {np.mean(grouped_df.apply(grouped_mse))}')
+        feature_df = feature_df.merge(mape_df.reset_index(),
+                                      on=id_column)
+        feature_df = feature_df.drop(id_column, axis=1)
+        import statsmodels.api as sm
+        feature_df = sm.add_constant(feature_df, prepend=False)
+        mod = sm.OLS(feature_df[0], feature_df.drop(0, axis=1))
+        res = mod.fit()
+        print(res.summary())
+        return
 
     def plot(self,
              fitted,
@@ -342,14 +369,10 @@ class Murmur:
                              color='lightseagreen',
                              linestyle='dashed',
                              alpha=.25)
-
         plt.show()
 
-    def feature_importance(self, **kwargs):
+    def plot_importance(self, **kwargs):
         import lightgbm as gbm
         gbm.plot_importance(self.model_obj, **kwargs)
-
-
-
 
 

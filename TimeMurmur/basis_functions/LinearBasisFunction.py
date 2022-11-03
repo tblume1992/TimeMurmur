@@ -45,7 +45,7 @@ class LinearBasisFunction:
                                       len(y) - len_splits + 1)
             changepoints[:, i] = np.append(left_basis, right_basis[1:])
         changepoints[:, i+1] = np.arange(0, len(y))
-        if self.basis_difference:
+        if self.basis_difference and self.n_changepoints > 1:
             r,c = np.triu_indices(changepoints.shape[1],1)
             changepoints = changepoints[:,r] - changepoints[:,c]
         return changepoints
