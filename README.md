@@ -111,3 +111,16 @@ fitted = murmur.fit(train_df,
                     alpha=.9)
 predicted = murmur.predict(20)
 ```
+
+## Explanations with Shapley
+
+```
+#get shapley values of predictions
+predicted_shap_vals = murmur.explain_predictions(predicted)
+fitted_shap_vals = murmur.explain_fitted(fitted)
+#plot using shapley values
+murmur.plot_explanations(fitted_shap_vals=fitted_shap_vals,
+                         predicted_shap_vals=predicted_shap_vals,
+                         murmur_id=0)
+'''
+
