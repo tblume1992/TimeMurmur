@@ -28,9 +28,9 @@ class FourierBasisFunction:
                                                    seasonal_period,
                                                    fourier_order)
         if self.seasonal_weights is None:
-            return future_harmonics[length:, :]
-        else:
-            return future_harmonics[length:, :] * self.seasonal_weights[-1]
+            return future_harmonics
+        # else:
+        #     return future_harmonics[length:, :] * self.seasonal_weights[-1]
         
 #%%
 if __name__ == '__main__':

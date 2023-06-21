@@ -58,10 +58,10 @@ class TimeAxis:
     def build_future_index(self,
                            forecast_horizon):
         
-        future_dates = pd.date_range(start=self.dates[-1],
+        future_dates = pd.date_range(start=self.dates[0],
                                      freq=self.freq,
-                                     periods=forecast_horizon + 1)
-        return future_dates[1:]    
+                                     periods=len(self.dates) + forecast_horizon)
+        return future_dates
     
     def build_axis(self, time_exogenous):
         self.dates = self.fill_gaps(self.dates)
@@ -124,12 +124,13 @@ class TimeAxis:
         for seas in self.seasonal_period:
             if self.fourier_order is not None:
                 self.fbf = self.run_dict['global'][f'{seas}_basis_function']
+                dataset_dates = list(self.run_dict['global']['Dataset Dates'])
                 future_seas = self.get_future_fourier(forecast_horizon,
                                                       seas,
                                                       self.fourier_order)
                 future_seas = pd.DataFrame(future_seas,
                                     columns=[f'{seas}_fourier_{i+1}' for i in range(2 * self.fourier_order)],
-                                    index=future_dates)
+                                    index=dataset_dates + future_dates)
                 if self.seasonal_dummy:
                     date_length = len(self.dates) + forecast_horizon
                     repeats = int(1+(date_length)/(seas))

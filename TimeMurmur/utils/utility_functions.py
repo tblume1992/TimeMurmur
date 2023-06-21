@@ -20,8 +20,19 @@ def handle_future_index(dates, freq, forecast_horizon):
                                  freq=freq)[1:]
     return future_index
 
+def future_index(dataset, run_dict, freq, forecast_horizon):
+    ts_id = dataset['Murmur ID'].iloc[0]
+    date_column = run_dict['global']['Date Column']
+    last_date = run_dict['global']['last date'][ts_id]
+    future_index = pd.date_range(last_date,
+                                 periods=forecast_horizon + 1,
+                                 freq=freq)[1:]
+    future_df = pd.DataFrame(future_index, columns=[date_column])
+    future_df['Murmur ID'] = ts_id
+    return future_df
+
 def get_data():
-    return pd.read_csv(r'TimeMurmur/utils/murmur_example.csv')
+    return pd.read_csv(r'./TimeMurmur/utils/murmur_example.csv')
 
 # Error metrics from: https://github.com/kdgutier/esrnn_torch/blob/master/ESRNN/utils_evaluation.py
 def mse(y, y_hat):
@@ -62,7 +73,10 @@ def mape(y, y_hat):
   """
   y = np.reshape(y, (-1,))
   y_hat = np.reshape(y_hat, (-1,))
-  mape = np.mean(np.abs(y - y_hat) / np.abs(y))
+  mape = np.mean(np.abs(y - y_hat) / (0.0001 + np.abs(y)))
+  mape = min(2, mape)
+  if mape == np.inf:
+      mape = 2.0
   return mape
 
 def smape(A, F):

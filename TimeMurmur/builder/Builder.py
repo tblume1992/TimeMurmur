@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from sklearn.preprocessing import LabelEncoder  
-from TimeMurmur.utils.utility_functions import infer_freq, handle_future_index
+from TimeMurmur.utils.utility_functions import infer_freq, handle_future_index, future_index
 from TimeMurmur.builder.PreProcess import PreProcess
 from TimeMurmur.builder.BuildTimeAxis import TimeAxis
 from TimeMurmur.builder.BuildPanelAxis import PanelAxis
@@ -74,9 +74,13 @@ class Builder:
         self.run_dict = {}
         self.run_dict['local'] = {}
         self.run_dict['global'] = {}
+        self.run_dict['global']['last date'] = {}
         self.run_dict['global']['categorical_encoder'] = {}
         self.run_dict['global']['IDs with Trend'] = []
-        self.run_dict['global']['main_seasonal_period'] = self.seasonal_period[0]
+        if self.seasonal_period is not None:
+            self.run_dict['global']['main_seasonal_period'] = self.seasonal_period[0]
+        else:
+            self.run_dict['global']['main_seasonal_period'] = 0
         self.run_dict['global']['id_axis'] = None
         self.run_dict['global']['Date Column'] = date_column
         self.run_dict['global']['ID Column'] = id_column
@@ -125,7 +129,7 @@ class Builder:
             self.run_dict['global']['ID Mapping'] = dataset[[self.id_column, 'Murmur ID']].drop_duplicates()
         except:
             le = LabelEncoder()
-            dataset['Murmur ID'] = le.fit_transform(dataset[self.id_column])
+            dataset['Murmur ID'] = le.fit_transform(dataset[self.id_column].values)
         self.run_dict['global']['ID Mapping'] = dataset[[self.id_column, 'Murmur ID']].drop_duplicates()
         return dataset
     
@@ -181,8 +185,8 @@ class Builder:
         return time_axis
     
     def build_future_time_axis(self, forecast_horizon, dataset, future_time_exogenous=None):
-        dates = dataset[self.date_column].drop_duplicates().sort_values()
-        time_builder = TimeAxis(dates=dataset[self.date_column], 
+        dates = list(dataset[self.date_column].drop_duplicates().sort_values())[-forecast_horizon:]
+        time_builder = TimeAxis(dates=dataset[self.date_column],
                                 run_dict=self.run_dict,
                                 seasonal_period=self.seasonal_period,
                                 fourier_order=self.fourier_order,
@@ -225,6 +229,8 @@ class Builder:
         return
         
     def build_panel_axis(self, dataset):
+        ts_id = dataset['Murmur ID'].iloc[0]
+        self.run_dict['global']['last date'][ts_id] = dataset[self.date_column].max()
         panel_builder = PanelAxis(run_dict=self.run_dict,
                                   n_basis=self.n_basis,
                                   decay=self.decay,
@@ -267,6 +273,7 @@ class Builder:
         else:
             print('Preprocessing Data: Scaling, building basis functions, capping outliers etc.')
             processed_dataset = self.preprocess(dataset)
+        # processed_dataset = processed_dataset.dropna(subset=['Murmur Target'])
         if id_axis is not None:
             print('Building ID Features')
             try:
@@ -317,13 +324,18 @@ class Builder:
         merge_on = [id_column, date_column]
         id_df = pd.DataFrame(self.run_dict['local'].keys(),
                              columns=[id_column])
-        forecast_dates = handle_future_index(self.run_dict['global']['Dates'],
-                                             freq=self.run_dict['global']['freq'],
-                                             forecast_horizon=forecast_horizon)
-        date_df = pd.DataFrame(forecast_dates,
-                               columns=[date_column])
-        self.run_dict['global']['Forecast Dates'] = forecast_dates
-        pred_X = pd.merge(id_df, date_df, how='cross')  
+        pred_X = id_df.groupby(id_column).apply(future_index,
+                                                self.run_dict,
+                                                self.run_dict['global']['freq'],
+                                                forecast_horizon)
+        pred_X = pred_X.reset_index(drop=True)
+        # forecast_dates = handle_future_index(self.run_dict['global']['Dates'],
+        #                                      freq=self.run_dict['global']['freq'],
+        #                                      forecast_horizon=forecast_horizon)
+        # date_df = pd.DataFrame(forecast_dates,
+        #                        columns=[date_column])
+        # self.run_dict['global']['Forecast Dates'] = forecast_dates
+        # pred_X = pd.merge(id_df, date_df, how='cross')
         time_axis = self.build_future_time_axis(forecast_horizon,
                                                 pred_X,
                                                 time_exogenous)

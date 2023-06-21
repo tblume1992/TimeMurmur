@@ -25,7 +25,7 @@ class PanelAxis:
     
     def get_piecewise(self, y, n_basis, ts_id):
         if n_basis >= len(y):
-            n_basis = len(y) - 1
+            n_basis = max(1, len(y) - 1)
         lbf = LinearBasisFunction(n_changepoints=n_basis,
                                   decay=self.decay,
                                   weighted=self.weighted,
@@ -57,8 +57,11 @@ class PanelAxis:
         final_basis = []
         if self.n_basis is not None and self.n_basis:
             for basis in self.n_basis:
-                X = id_dict[f'{basis}_function'].get_future_basis(id_dict[f'{basis}_basis'],
-                                                          forecast_horizon)
+                try:
+                    X = id_dict[f'{basis}_function'].get_future_basis(id_dict[f'{basis}_basis'],
+                                                              forecast_horizon)
+                except:
+                    X = np.resize(np.array(np.nan), (forecast_horizon, basis))
                 size = np.shape(X)[1] - 1
                 X = pd.DataFrame(X,
                                  index=refined_df.index,

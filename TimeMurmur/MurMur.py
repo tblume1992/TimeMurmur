@@ -16,8 +16,7 @@ sns.set_style('darkgrid')
 
 class Murmur:
     def __init__(self,
-                 floor=None,
-                 scale_type='standard'):
+                 floor=None):
         self.floor = floor
         self.run_dict = None
         self.builder = None
@@ -42,7 +41,7 @@ class Murmur:
             fourier_order=10,
             seasonal_weights=None,
             weighted=True,
-            n_basis=10,
+            n_basis=None,
             seasonal_period=None,
             test_size=None,
             linear_trend='auto',
@@ -64,10 +63,16 @@ class Murmur:
             linear_test_window=None,
             seasonal_dummy=False,
             outlier_cap=None,
-            ts_features=False
+            ts_features=False,
+            sample_weights=None,
+            num_threads=1
             ):
+        self.difference = difference
         self.scale = scale
+        self.linear_trend = linear_trend
         self.id_column = id_column
+        self.date_column = date_column
+        self.target_column = target_column
         if freq == 'auto':
             dates = df[date_column].drop_duplicates().sort_values()
             freq = infer_freq(dates)
@@ -96,7 +101,9 @@ class Murmur:
                           floor=self.floor,
                           outlier_cap=outlier_cap,
                           ts_features=ts_features)
+        print('Preprocessing Data: Scaling, building basis functions, capping outliers etc.')
         process_dataset = self.builder.preprocess(df)
+        process_dataset = process_dataset.dropna(subset=['Murmur Target'])
         if id_feature_columns is not None or id_exogenous is not None:
             id_dataset = self.builder.build_id_axis(process_dataset,
                                                id_exogenous=id_exogenous,
@@ -109,7 +116,7 @@ class Murmur:
             id_dataset = None
         time_dataset = self.builder.build_time_axis(df,
                                                time_exogenous=time_exogenous)
-        dataset = self.builder.build_dataset(process_dataset, 
+        self.dataset = self.builder.build_dataset(process_dataset,
                                         id_axis=id_dataset,
                                         time_axis=time_dataset)
         drop_columns = [id_column, date_column, target_column]
@@ -125,20 +132,21 @@ class Murmur:
                       boosting_params=boosting_params,
                       scale_pos_weights=scale_pos_weights,
                       is_unbalance=is_unbalance,
-                      alpha=alpha)
+                      alpha=alpha,
+                      num_threads=num_threads)
         self.model_obj = model.build_model()
         self.run_dict['global']['model'] = model.boosting_params
         if categorical_columns is None:
             cat_features = ['Murmur ID']
         else:
             cat_features = list(set(categorical_columns + ['Murmur ID']))
-        if 'murmur_seasonal_dummy' in dataset.columns:
+        if 'murmur_seasonal_dummy' in self.dataset.columns:
             cat_features += ['murmur_seasonal_dummy']
         self.run_dict['global']['cat_features'] = cat_features
-        dataset = dataset.sort_values(by=['Murmur ID', date_column])
-        self.train_X = dataset.drop(drop_columns+['Murmur Target', 'Murmur Data Split'], axis=1)
+        self.dataset = self.dataset.sort_values(by=['Murmur ID', date_column])
+        self.train_X = self.dataset.drop(drop_columns+['Murmur Target', 'Murmur Data Split'], axis=1)
         eval_set = []
-        train_y = dataset['Murmur Target']
+        train_y = self.dataset['Murmur Target']
         if labels is not None:
             train_y = labels
         if not eval_set:
@@ -150,12 +158,12 @@ class Murmur:
                            train_y, 
                             eval_set=eval_set,
                             early_stopping_rounds=early_stopping_rounds, 
-                           categorical_feature=cat_features)
+                           categorical_feature=cat_features,
+                           sample_weight=sample_weights)
         fitted = self.model_obj.predict(self.train_X)
-        fitted_df = dataset[['Murmur ID', id_column, date_column, target_column]]
+        fitted_df = self.dataset[['Murmur ID', id_column, date_column, target_column, 'Murmur Target']]
         fitted_df['Predictions'] = fitted
-        fitted_df = self.retrend_fitted(fitted_df)
-        if self.scale:
+        if self.scale or self.difference or self.linear_trend:
             fitted_df = self.unscale(fitted_df)
         if self.floor is not None:
             fitted_df['Predictions'] = fitted_df['Predictions'].clip(lower=self.floor)
@@ -165,17 +173,17 @@ class Murmur:
         date_column = self.run_dict['global']['Date Column']
         id_column = 'Murmur ID'
         final_predicted = []
+        self.pred_X = []
         print('Running Recursive Predictions')
-        forecast_dates = self.run_dict['global']['Forecast Dates'].sort_values()
-        for date in tqdm(forecast_dates):
-            refined_pred_X = pred_X[pred_X[date_column] == date]
-
+        for i in tqdm(range(forecast_horizon)):
+            refined_pred_X = pred_X.groupby('Murmur ID').nth(i)
             for _, dataset in self.run_dict['global']['AR Datasets'].items(): 
                 refined_pred_X = refined_pred_X.merge(dataset,
                                                       on=['Murmur ID',
                                                           date_column],
                                                       how='left')
             self.refined_pred_X = refined_pred_X
+            self.pred_X.append(refined_pred_X)
             model_X = refined_pred_X.drop([date_column], axis=1)
             predicted = self.model_obj.predict(model_X[list(self.columns)])
             predicted = pd.DataFrame(predicted, columns=['Predictions'])
@@ -183,6 +191,7 @@ class Murmur:
             predicted[date_column] = refined_pred_X[date_column].values
             self.builder.build_future_ar_axis(predicted)
             final_predicted.append(predicted)
+        self.pred_X = pd.concat(self.pred_X)
         return pd.concat(final_predicted)
     
     def predict(self, 
@@ -197,7 +206,6 @@ class Murmur:
         pred_X = self.builder.build_future_dataset(forecast_horizon,
                                                    time_exogenous=time_exogenous,
                                                    panel_exogenous=panel_exogenous)
-        self.pred_X = pred_X
         if self.run_dict['global']['AR Datasets'] is not None:
             predicted_df = self.ar_predict(forecast_horizon,
                                         pred_X)
@@ -205,6 +213,7 @@ class Murmur:
                                               on='Murmur ID',
                                               how='left')
         else:
+            self.pred_X = pred_X
             if predict_proba:
                 predicted = self.model_obj.predict_proba(pred_X[list(self.columns)])
                 predicted = predicted[:, 0]
@@ -215,96 +224,154 @@ class Murmur:
                                               on='Murmur ID',
                                               how='left')
             predicted_df['Predictions'] = predicted
-        predicted_df = self.retrend_predicted(predicted_df)
-        if self.scale:
+        if self.scale or self.difference or self.linear_trend:
             predicted_df = self.unscale(predicted_df)
         if self.floor is not None:
             predicted_df['Predictions'] = predicted_df['Predictions'].clip(lower=self.floor)
+        print('All Done!')
         return predicted_df
 
     def inverse_transform(self, df):
         scaler = self.run_dict['local'][df['Murmur ID'].iloc[0]]['scaler']
-        df['Predictions'] = scaler.inverse_transform(df['Predictions'].values.reshape(-1,1))
+        df['Unscaled Predictions'] = df['Predictions']
+        linear_trend = self.run_dict['local'][df['Murmur ID'].iloc[0]]['trend']
+        if self.target_column in df.columns:
+            if linear_trend:
+                actuals = df['Murmur Target'].values
+                linear = True
+            else:
+                actuals = df[self.target_column].values
+                linear = False
+            preds = scaler.inverse_transform(df['Predictions'].values.reshape(-1,1),
+                                             actuals=actuals,
+                                             linear=linear)
+        else:
+            preds = scaler.inverse_transform(df['Predictions'].values.reshape(-1,1))
+        if any(np.isnan(preds)):
+            print('Nan found when Inverse Transforming, use a more stable transformer such as "standard"')
+        df['Predictions'] = preds
         return df
     
     def unscale(self, forecast_df):
         return forecast_df.groupby('Murmur ID').apply(self.inverse_transform)
 
+    def explain_predictions(self, predicted_df):
+        pred_X = self.pred_X[self.train_X.columns]
+        self.explainer = shap.TreeExplainer(self.model_obj)
+        shap_values = self.explainer.shap_values(pred_X)
+        shap_values = pd.DataFrame(shap_values, columns=pred_X.columns)
+    
+        shap_values = shap_values.rename({'Murmur ID': 'Level'}, axis=1)
+    
+        shap_values[self.date_column] = self.pred_X[self.date_column].values
+        shap_values['Murmur ID'] = self.pred_X['Murmur ID'].values
+        shap_values = shap_values.merge(self.run_dict['global']['ID Mapping'],
+                                        on='Murmur ID')
+        # shap_values[self.date_column] = shap_values[self.date_column].dt.date
+        shap_values['Predictions'] = predicted_df['Predictions']
 
-    def retrend_fitted(self, fitted):
-        trend_ids = self.run_dict['global']['IDs with Trend']
-        if trend_ids:
-            for ts_id in tqdm(trend_ids):
-                y = fitted[fitted['Murmur ID'] == int(ts_id)]['Predictions']
-                trend = self.run_dict['local'][ts_id]['trend']['trend_line']
-                fitted.loc[fitted['Murmur ID'] == int(ts_id),'Predictions'] = y + trend
-        return fitted
+        scale = (shap_values['Predictions'].values / shap_values.iloc[:, :-4].sum(axis=1).values)
+        shap_values.iloc[:, :-4] = shap_values.iloc[:, :-4].mul(scale, axis=0)
+        def rename_column(column_name, tags=None):
+            if 'basis' in column_name:
+                return 'Trend'
+            if 'calc' in column_name:
+                return 'TimeSeriesFeatures'
+            if 'fourier' in column_name:
+                return 'Seasonality'
+            if 'ar_' in column_name:
+                return 'LaggedData'
+            if tags is not None:
+                matching = [s for s in tags if column_name.split('_')[0] in s]
+                if matching:
+                    return matching
+            return column_name
+        shap_values.columns = [rename_column(i) for i in shap_values.columns]
+        shap_values = shap_values.groupby(level=0, axis=1).sum()
+        return shap_values
 
-    def retrend_predicted(self, predicted):
-        trend_ids = self.run_dict['global']['IDs with Trend']
-        if trend_ids:
-            for ts_id in tqdm(trend_ids):
-                y = predicted[predicted['Murmur ID'] == int(ts_id)]['Predictions'].values
-                slope = self.run_dict['local'][ts_id]['trend']['slope']
-                intercept = self.run_dict['local'][ts_id]['trend']['intercept']
-                penalty = self.run_dict['local'][ts_id]['trend']['penalty']
-                n = len(self.run_dict['local'][ts_id]['trend']['trend_line'])
-                linear_trend = [i for i in range(0, len(y))]
-                linear_trend = np.reshape(linear_trend, (len(linear_trend), 1))
-                linear_trend += n + 1
-                linear_trend = np.multiply(linear_trend, slope*penalty) + intercept
-                retrended_pred = y + np.reshape(linear_trend, (-1,))
-                predicted.loc[predicted['Murmur ID'] == int(ts_id),'Predictions'] = retrended_pred
-        return predicted
+    def explain_fitted(self, fitted_df):
+        pred_X = self.train_X
+        self.explainer = shap.TreeExplainer(self.model_obj)
+        shap_values = self.explainer.shap_values(pred_X)
+        shap_values = pd.DataFrame(shap_values, columns=pred_X.columns)
+    
+        shap_values = shap_values.rename({'Murmur ID': 'Level'}, axis=1)
+        shap_values[self.date_column] = self.dataset[self.date_column].values
+        shap_values['Murmur ID'] = self.dataset['Murmur ID'].values
+        shap_values = shap_values.merge(self.run_dict['global']['ID Mapping'],
+                                        on='Murmur ID')
+        # shap_values[self.date_column] = shap_values[self.date_column].dt.date
+        shap_values['Predictions'] = fitted_df['Predictions'].values
 
-    def Explain(self):
-        explainer = shap.TreeExplainer(self.model_obj)
-        shap_values = explainer.shap_values(self.train_X)
-        return explainer, shap_values
+        scale = (shap_values['Predictions'].values / shap_values.iloc[:, :-4].sum(axis=1).values)
+        shap_values.iloc[:, :-4] = shap_values.iloc[:, :-4].mul(scale, axis=0)
+        def rename_column(column_name, tags=None):
+            if 'basis' in column_name:
+                return 'Trend'
+            if 'calc' in column_name:
+                return 'TimeSeriesFeatures'
+            if 'fourier' in column_name:
+                return 'Seasonality'
+            if 'ar_' in column_name:
+                return 'LaggedData'
+            if tags is not None:
+                matching = [s for s in tags if column_name.split('_')[0] in s]
+                if matching:
+                    return matching
+            return column_name
+        shap_values.columns = [rename_column(i) for i in shap_values.columns]
+        shap_values = shap_values.groupby(level=0, axis=1).sum()
+        return shap_values
 
-    # def Optimize(cls, y, seasonality, n_folds, test_size=None):
-    #     optimizer = Optimize(y, Murmur, seasonality, n_folds, test_size)
-    #     optimized = optimizer.fit()
-    #     optimized['ar'] = list(range(1, int(optimized['ar']) + 1))
-    #     optimized['n_estimators'] = int(optimized['n_estimators'])
-    #     optimized['num_leaves'] = int(optimized['num_leaves'])
-    #     optimized['n_basis'] = int(optimized['n_basis'])
-    #     optimized['fourier_order'] = int(optimized['fourier_order'])
-    #     return optimized
-
-    def Evaluate(self, fitted, predicted, test_df):
-        id_column = self.run_dict['global']['ID Column']
+    def plot_explanations(self,
+                          ts_id=None,
+                          murmur_id=None,
+                          level=None,
+                          predicted_shap_vals=None,
+                          fitted_shap_vals=None):
+        if (murmur_id is None and ts_id is None) and level is None:
+            raise ValueError('Must pass a level or time series ID')
+        if (fitted_shap_vals is None and predicted_shap_vals is None):
+            raise ValueError('Must pass a fitted or predicted shap val DF')
         date_column = self.run_dict['global']['Date Column']
+        if murmur_id is not None:
+            id_column = 'Murmur ID'
+            ts_id = murmur_id
+        else:
+            id_column = self.run_dict['global']['ID Column']
         target_column = self.run_dict['global']['Target Column']
-        seasonal_period = self.run_dict['global']['main_seasonal_period']
-        merge_on = [id_column, date_column]
-        predicted = predicted.merge(test_df[merge_on + [target_column]],
-                                    on=merge_on)
-        grouped_df = predicted.groupby(id_column)
-        def grouped_smape(df):
-            return smape(df[target_column], df['Predictions'])
-        def grouped_mse(df):
-            return mse(df[target_column], df['Predictions'])
-        def grouped_mape(df):
-            return mape(df[target_column], df['Predictions'])
-        mape_df = grouped_df.apply(grouped_mape)
-        feature_df = get_features(fitted,
-                                  id_column,
-                                  target_column,
-                                  seasonal_period,
-                                  scale_data=False)
-        print(f'Mean SMAPE: {np.mean(grouped_df.apply(grouped_smape))}')
-        print(f'Mean MAPE: {100*np.mean(mape_df)}')
-        print(f'Mean MSE: {np.mean(grouped_df.apply(grouped_mse))}')
-        feature_df = feature_df.merge(mape_df.reset_index(),
-                                      on=id_column)
-        feature_df = feature_df.drop(id_column, axis=1)
-        import statsmodels.api as sm
-        feature_df = sm.add_constant(feature_df, prepend=False)
-        mod = sm.OLS(feature_df[0], feature_df.drop(0, axis=1))
-        res = mod.fit()
-        print(res.summary())
-        return
+        if predicted_shap_vals is not None:
+            plot_cols = [i for i in predicted_shap_vals.columns if i not in ['Predictions',
+                                                                              'Murmur ID',
+                                                                              self.id_column,
+                                                                              self.date_column]]
+        else:
+            plot_cols = [i for i in fitted_shap_vals.columns if i not in ['Predictions',
+                                                                              'Murmur ID',
+                                                                              self.id_column,
+                                                                              self.date_column]]
+        if level == 'all':
+            if fitted_shap_vals is not None:
+                fitted_shap_vals = fitted_shap_vals.groupby(self.date_column)[plot_cols].sum().reset_index()
+            if predicted_shap_vals is not None:
+                predicted_shap_vals = predicted_shap_vals.groupby(self.date_column)[plot_cols].sum().reset_index()
+        else:
+            if fitted_shap_vals is not None:
+                fitted_shap_vals = fitted_shap_vals[fitted_shap_vals[id_column] == ts_id]
+            if predicted_shap_vals is not None:
+                predicted_shap_vals = predicted_shap_vals[predicted_shap_vals[id_column] == ts_id]
+        if predicted_shap_vals is not None and fitted_shap_vals is not None:
+            vals = pd.concat([fitted_shap_vals, predicted_shap_vals])
+            vals = vals.set_index(self.date_column)[plot_cols]
+            vals.plot(kind='bar', stacked=True)
+        elif fitted_shap_vals is not None:
+            fitted_shap_vals = fitted_shap_vals.set_index(self.date_column)[plot_cols]
+            self.fitted_shap_vals = fitted_shap_vals
+            fitted_shap_vals.plot(kind='bar', stacked=True)
+        elif predicted_shap_vals is not None:
+            predicted_shap_vals = predicted_shap_vals.set_index(self.date_column)[plot_cols]
+            predicted_shap_vals.plot(kind='bar', stacked=True)
 
     def plot(self,
              fitted,
@@ -316,6 +383,7 @@ class Murmur:
              upper_predicted=None,
              lower_fitted=None,
              lower_predicted=None):
+        fig, ax = plt.subplots()
         if (murmur_id is None and ts_id is None) and level is None:
             raise ValueError('Must pass a level or time series ID')
         date_column = self.run_dict['global']['Date Column']
@@ -327,23 +395,28 @@ class Murmur:
         target_column = self.run_dict['global']['Target Column']
         if level == 'all':
             refined_df = fitted.groupby(date_column)[[target_column,'Predictions']].sum().reset_index()
+
         else:
             refined_df = fitted[fitted[id_column] == ts_id]
-        plt.plot(refined_df[date_column],
-                 refined_df['Predictions'],  
-                 color='lightseagreen')
+
+        ax.plot(refined_df[date_column],
+                  refined_df['Predictions'],  
+                  color='lightseagreen',
+                  label='Fitted')
         if predicted is not None:
             if level is not None:
                 predicted = predicted.groupby(date_column)[['Predictions']].sum().reset_index()
             else:
                 predicted = predicted[predicted[id_column] == ts_id]
-            plt.plot(predicted[date_column],
-                     predicted['Predictions'],
-                     color='lightseagreen',
-                     linestyle='dashed')
-        plt.plot(refined_df[date_column],
+            ax.plot(predicted[date_column],
+                      predicted['Predictions'],
+                      color='lightseagreen',
+                      linestyle='dashed',
+                      label='Predicted')
+        ax.plot(refined_df[date_column],
                   refined_df[target_column],
-                  color='navy')
+                  color='navy',
+                  label='Target')
         if upper_fitted is not None and lower_fitted is not None:
             if level is not None:
                 upper_df = upper_fitted.groupby(date_column)[[target_column,'Predictions']].sum().reset_index()
@@ -351,11 +424,11 @@ class Murmur:
             else:
                 upper_df = upper_fitted[upper_fitted[id_column] == ts_id]
                 lower_df = lower_fitted[lower_fitted[id_column] == ts_id]
-            plt.fill_between(x=refined_df[date_column],
-                             y1=upper_df['Predictions'],
-                             y2=lower_df['Predictions'],
-                             color='lightseagreen',
-                             alpha=.1)
+            ax.fill_between(x=refined_df[date_column],
+                              y1=upper_df['Predictions'],
+                              y2=lower_df['Predictions'],
+                              color='lightseagreen',
+                              alpha=.1)
         if upper_predicted is not None and lower_predicted is not None:
             if level is not None:
                 upper_df = upper_predicted.groupby(date_column)[['Predictions']].sum().reset_index()
@@ -363,12 +436,15 @@ class Murmur:
             else:
                 upper_df = upper_predicted[upper_predicted[id_column] == ts_id]
                 lower_df = lower_predicted[lower_predicted[id_column] == ts_id]
-            plt.fill_between(x=upper_df[date_column],
-                             y1=upper_df['Predictions'],
-                             y2=lower_df['Predictions'],
-                             color='lightseagreen',
-                             linestyle='dashed',
-                             alpha=.25)
+            ax.fill_between(x=upper_df[date_column],
+                              y1=upper_df['Predictions'],
+                              y2=lower_df['Predictions'],
+                              color='lightseagreen',
+                              linestyle='dashed',
+                              alpha=.25)
+
+        plt.legend()
+
         plt.show()
 
     def plot_importance(self, **kwargs):

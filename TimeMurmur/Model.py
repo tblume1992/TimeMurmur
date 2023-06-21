@@ -2,6 +2,7 @@
 import warnings
 import numpy as np
 import lightgbm as gbm
+from catboost import Pool, CatBoostRegressor
 # import optuna.integration.lightgbm as gbm
 warnings.filterwarnings("ignore")
 
@@ -19,7 +20,8 @@ class Model:
                  boosting_params=None,
                  scale_pos_weights=None,
                  is_unbalance=True,
-                 alpha=None):
+                 alpha=None,
+                 num_threads=1):
         self.objective = objective
         self.return_proba = return_proba
         if boosting_params is None:
@@ -37,7 +39,8 @@ class Model:
                                     'num_iterations': num_iterations,
                                     'alpha': alpha,
                                     'scale_pos_weights': scale_pos_weights,
-                                    'is_unbalance': is_unbalance
+                                    'is_unbalance': is_unbalance,
+                                    'num_threads': num_threads
                                 }
         else:
             self.boosted_params = boosting_params
@@ -66,9 +69,10 @@ class Model:
             eval_set = [(test_X, test_y)]
         train_X = train_set.drop('Murmur Target', axis=1)
         train_y = train_set['Murmur Target']
+
         del train_set
         if validation_set is not None:
             del validation_set
         return train_X, train_y, eval_set
-    
+
     
