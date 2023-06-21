@@ -122,5 +122,5 @@ fitted_shap_vals = murmur.explain_fitted(fitted)
 murmur.plot_explanations(fitted_shap_vals=fitted_shap_vals,
                          predicted_shap_vals=predicted_shap_vals,
                          murmur_id=0)
-'''
+```
 
